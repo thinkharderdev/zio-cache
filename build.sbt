@@ -37,7 +37,8 @@ addCommandAlias(
   ";zioCacheNative/test:compile"
 )
 
-val zioVersion = "1.0.12"
+val zioVersion       = "1.0.12"
+val zioSchemaVersion = "0.1.4"
 
 lazy val root = project
   .in(file("."))
@@ -48,7 +49,7 @@ lazy val root = project
   .aggregate(
     zioCacheJVM,
     zioCacheJS,
-    zioCacheNative,
+//    zioCacheNative,
     benchmarks,
     docs
   )
@@ -60,9 +61,11 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   .settings(buildInfoSettings("zio.cache"))
   .settings(
     libraryDependencies ++= Seq(
-      "dev.zio" %% "zio"          % zioVersion,
-      "dev.zio" %% "zio-test"     % zioVersion % Test,
-      "dev.zio" %% "zio-test-sbt" % zioVersion % Test
+      "dev.zio"  %% "zio"                   % zioVersion,
+      "dev.zio" %%% "zio-schema"            % zioSchemaVersion,
+      "dev.zio" %%% "zio-schema-derivation" % zioSchemaVersion,
+      "dev.zio"  %% "zio-test"              % zioVersion % Test,
+      "dev.zio"  %% "zio-test-sbt"          % zioVersion % Test
     )
   )
   .settings(testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"))

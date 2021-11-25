@@ -1,11 +1,13 @@
 package zio.cache
 
 import zio.internal.MutableConcurrentQueue
-import zio.{Exit, IO, Promise, UIO, URIO, ZIO}
+import zio.stream.{Take, ZStream}
+import zio.{Chunk, Exit, IO, Promise, UIO, URIO, ZHub, ZIO, ZQueue}
 
 import java.time.{Duration, Instant}
 import java.util.Map
 import java.util.concurrent.atomic.{AtomicBoolean, LongAdder}
+import scala.jdk.CollectionConverters._
 
 /**
  * A `Cache` is defined in terms of a lookup function that, given a key of
@@ -60,6 +62,8 @@ sealed abstract class Cache[-Key, +Error, +Value] {
    * lookup function, disregarding the last `Error`.
    */
   def refresh(key: Key): IO[Error, Unit]
+
+  def find[V1 >: Value, A](query: Query[V1, A]): IO[Error, ZStream[Any, Nothing, V1]]
 
   /**
    * Invalidates the value associated with the specified key.
@@ -206,6 +210,31 @@ object Cache {
                 }
               }
             }
+
+          override def find[V1 >: Value, A](query: Query[V1, A]): IO[Error, ZStream[Any, Nothing, V1]] =
+            for {
+              queue <- ZQueue.unbounded[V1]
+              _ <- ZIO.foreach(map.values().asScala) {
+                     case MapValue.Pending(key, promise) =>
+                       trackAccess(key)
+                       promise.await.flatMap { value =>
+                         if (query(value)) queue.offer(value).unit
+                         else ZIO.unit
+                       }
+                     case MapValue.Complete(key, Exit.Success(value), _, _) =>
+                       trackAccess(key)
+                       if (query(value)) queue.offer(value).unit
+                       else ZIO.unit
+                     case MapValue.Refreshing(promise, MapValue.Complete(key, _, _, _)) =>
+                       trackAccess(key)
+                       promise.await.flatMap { value =>
+                         if (query(value)) queue.offer(value).unit
+                         else ZIO.unit
+                       }
+                     case _ => ZIO.unit
+                   }
+              values <- queue.takeAll
+            } yield ZStream.fromIterable(values)
 
           override def refresh(k: Key): IO[Error, Unit] =
             ZIO.effectSuspendTotal {

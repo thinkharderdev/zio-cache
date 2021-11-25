@@ -2,10 +2,21 @@ package zio.cache
 
 import zio._
 import zio.duration._
+import zio.schema._
 import zio.test.Assertion._
 import zio.test._
 
 object CacheSpec extends DefaultRunnableSpec {
+
+  case class User(id: Int, age: Int)
+  object User {
+    implicit val schema = DeriveSchema.gen[User]
+
+    val (id, age) = schema.makeAccessors(Query.QueryAccessorBuilder)
+  }
+
+  val lookupUser: Int => UIO[User] =
+    i => ZIO.succeed(User(i, i))
 
   def hash(x: Int): Int => UIO[Int] =
     y => ZIO.succeed((x ^ y).hashCode)
@@ -70,6 +81,17 @@ object CacheSpec extends DefaultRunnableSpec {
             expected <- ZIO.foreachPar(1 to 100)(hash(salt))
           } yield assertTrue(actual == expected)
         }
+      }
+    ),
+    suite("query")(
+      testM("sequential") {
+        for {
+          cache    <- Cache.make(100, Duration.Infinity, Lookup(lookupUser))
+          _        <- ZIO.foreach(1 to 100)(cache.get)
+          filtered <- cache.find(User.age < 50)
+          actual   <- filtered.runCollect
+          expected <- ZIO.foreach(1 to 49)(lookupUser).map(Chunk.fromIterable)
+        } yield assertTrue(actual == expected)
       }
     ),
     suite("`refresh` method")(
