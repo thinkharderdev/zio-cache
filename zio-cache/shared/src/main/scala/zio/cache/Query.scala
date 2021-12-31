@@ -1,7 +1,7 @@
 package zio.cache
 
 import zio.Chunk
-import zio.prelude.NonEmptyList
+import zio.prelude.{NonEmptyList}
 import zio.schema._
 import zio.schema.ast.NodePath
 
@@ -41,6 +41,10 @@ object Query {
       selector(value).map(_ == that).getOrElse(false)
   }
 
+  case class Contains[S,A](iterator: Iterator[S,A], that: A) extends Query[S,A]
+
+  case class IsA[S,A](discriminator: Discriminator[S,A]) extends Query[S,A]
+
   case class And[S, A1, A2](predicate1: Query[S, A1], predicate2: Query[S, A2]) extends Query[S, (A1, A2)] {
     override def apply(value: S): Boolean = predicate1(value) && predicate2(value)
   }
@@ -63,12 +67,24 @@ object Query {
     override def makeTraversal[S, A](collection: Schema.Collection[S, A], element: Schema[A]): Iterator[S, A] =
       Iterator(collection)
   }
-  
-  case class Iterator[S, A](collection: Schema.Collection[S, A]) {
-    def apply(value: S): Either[String, Chunk[A]] = ???
+
+  case class Cursor[S,A](whole: Schema[S], part: Schema[A], ops: NonEmptyList[CursorOp]) {
+    def get(whole: S): Either[String, Option[A]] = ???
+    def update(whole: S, newPart: A): Either[String, S] = ???
   }
 
-  case class Selector[S, A](product: Schema[S], fieldPath: NonEmptyList[String], fieldSchema: Schema[A]) {
+  sealed trait CursorOp
+
+  case class Iterator[S, A](collection: Schema.Collection[S, A]) extends CursorOp { self =>
+    def apply(value: S, index: Int): Either[String, A] = ???
+
+    def contains(that: A): Contains[S,A] = Contains(self,that)
+
+    def |=(that: A): Contains[S,A] = contains(that)
+  }
+
+  case class Selector[S, A](product: Schema[S], fieldPath: NonEmptyList[String], fieldSchema: Schema[A])
+      extends CursorOp {
     self =>
     def >(that: A): GreaterThan[S, A] = GreaterThan(self, that)
     def <(that: A): LessThan[S, A]    = LessThan(self, that)
@@ -77,7 +93,12 @@ object Query {
     def compose[A1](that: Selector[A, A1]): Selector[S, A1] =
       self.copy(fieldPath = self.fieldPath ++ that.fieldPath, fieldSchema = that.fieldSchema)
 
+    def discriminate[A1](that: Discriminator[A,A1]): Selector[S,A1] =
+      self.copy(fieldPath = self.fieldPath ++ NonEmptyList.single(that.label), fieldSchema = that.subtype)
+
     def /[A1](that: Selector[A, A1]): Selector[S, A1] = compose(that)
+
+    def /?[A1](that: Discriminator[A,A1]): Selector[S,A1] = discriminate(that)
 
     def apply(value: S): Either[String, A] = {
       @tailrec
@@ -101,7 +122,10 @@ object Query {
     def erased: Selector[_, _] = self.asInstanceOf[Selector[Any, Any]]
   }
 
-  case class Discriminator[S, A](enum: Schema.Enum[S], label: String, subtype: Schema[A]) {
+  case class Discriminator[S, A](enum: Schema.Enum[S], label: String, subtype: Schema[A]) extends CursorOp {
+
+
+
     def apply(value: S): Either[String, Option[A]] = enum.toDynamic(value) match {
       case DynamicValue.Enumeration((label0, value0)) if label0 == label =>
         subtype.fromDynamic(value0).map(Some(_))
